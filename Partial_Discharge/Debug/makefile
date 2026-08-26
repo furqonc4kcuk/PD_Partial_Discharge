@@ -64,8 +64,8 @@ all: main-build
 main-build: Partial_Discharge.elf secondary-outputs
 
 # Tool invocations
-Partial_Discharge.elf Partial_Discharge.map: $(OBJS) $(USER_OBJS) C:\Users\User\Documents\Partial_Discharge\STM32F407VGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "Partial_Discharge.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\User\Documents\Partial_Discharge\STM32F407VGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Partial_Discharge.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Partial_Discharge.elf Partial_Discharge.map: $(OBJS) $(USER_OBJS) D:\Project\POLTERA\Penelitian\PD_Partial_Discharge\Partial_Discharge\STM32F407VGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "Partial_Discharge.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"D:\Project\POLTERA\Penelitian\PD_Partial_Discharge\Partial_Discharge\STM32F407VGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Partial_Discharge.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

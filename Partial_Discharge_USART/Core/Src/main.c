@@ -56,14 +56,18 @@ TIM_HandleTypeDef htim2;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+#define ADC_SPS       2400000UL   /* 36MHz ADCCLK / 15 siklus (3 sampling+12 konversi 12-bit) */
+#define OUT_RATE_HZ   244UL
+#define OUT_DECIM     (ADC_SPS / OUT_RATE_HZ)   /* = 9836 sampel per angka keluaran */
 
 uint32_t adc_value = 0;
 char uart_buf[128];
 
-// Jumlah data yang disimpan di RAM
+static uint32_t acc_count = 0;
+static uint16_t acc_peak  = 0;
+
 #define BUFFER_SIZE 512
 
-// Struct untuk menyimpan ADC + timestamp
 typedef struct
 {
     uint32_t adc;
@@ -72,7 +76,7 @@ typedef struct
 
 #define ADC_BUF_SIZE 8192
 
-uint16_t adc_buffer[ADC_BUF_SIZE];
+volatile uint16_t adc_buffer[ADC_BUF_SIZE];
 
 volatile uint8_t tx_half = 0;
 volatile uint8_t tx_full = 0;
@@ -92,6 +96,9 @@ static void MX_SPI1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
+static void emit_sample(uint16_t v);
+static void reduce_half(const volatile uint16_t *p, uint32_t n);
+/* USER CODE END PFP */
 
 /* USER CODE END PFP */
 
@@ -158,94 +165,35 @@ int main(void)
   /* USER CODE BEGIN WHILE */
 //  while (1)
 //  {
-//    /* USER CODE END WHILE */
-//
-//    /* USER CODE BEGIN 3 */
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
 //  }
   uint32_t last_report = HAL_GetTick();
 
-//    while (1)
-//    {
-//        /* USER CODE END WHILE */
-//
-//        /* USER CODE BEGIN 3 */
-//
-//        // 1. Tangani setengah buffer pertama (Half Transfer)
-//        if(tx_half)
-//        {
-//            // Tunggu jika USB masih sibuk mengirim data sebelumnya
-//            while(CDC_Transmit_FS(
-//                    (uint8_t*)&adc_buffer[0],
-//                    (ADC_BUF_SIZE/2)*sizeof(uint16_t)) == USBD_BUSY)
-//            {
-//                usb_busy_count++; // Mencatat berapa kali USB sempat sibuk
-//            }
-//
-//            tx_half = 0; // Hapus flag HANYA SETELAH data sukses diserahkan ke USB
-//            sample_blocks++;
-//        }
-//
-//        // 2. Tangani setengah buffer kedua (Transfer Complete)
-//        if(tx_full)
-//        {
-//            // Tunggu jika USB masih sibuk
-//            while(CDC_Transmit_FS(
-//                    (uint8_t*)&adc_buffer[ADC_BUF_SIZE/2],
-//                    (ADC_BUF_SIZE/2)*sizeof(uint16_t)) == USBD_BUSY)
-//            {
-//                usb_busy_count++;
-//            }
-//
-//            tx_full = 0; // Hapus flag HANYA SETELAH data sukses diserahkan ke USB
-//            sample_blocks++;
-//        }
-//
-//        // 3. Laporan diagnostik berkala setiap 1 detik via UART2 (Lebih aman dibanding via USB)
-//        if(HAL_GetTick() - last_report >= 1000)
-//        {
-//            last_report = HAL_GetTick();
-//
-//            sprintf(
-//                uart_buf,
-//                "blocks=%lu usb_busy_retries=%lu\r\n",
-//                sample_blocks,
-//                usb_busy_count
-//            );
-//
-//            // Menggunakan UART fisik agar tidak mengganggu jalur data utama USB CDC
-//            HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, strlen(uart_buf), 10);
-//        }
-//    }
   while (1)
-    {
-        // Jika setengah buffer selesai diisi oleh DMA
-        if(tx_half)
-        {
-            tx_half = 0;
-            // Kita print beberapa sampel saja ke Serial Monitor agar tidak overload
-            for(int i = 0; i < 10; i++)
-            {
-                int len = sprintf(uart_buf, ">ADC:%u\n", adc_buffer[i]);
-//            	int len = sprintf(uart_buf, "%u\r\n", adc_buffer[i]);
-                while(CDC_Transmit_FS((uint8_t*)uart_buf, len) == USBD_BUSY);
-                HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, len, 10); // <-- DITAMBAHKAN: kirim juga via USART2
-            }
-        }
+  {
+      if (tx_half)
+      {
+          tx_half = 0;
+          reduce_half(&adc_buffer[0], ADC_BUF_SIZE / 2);
+          sample_blocks++;
+      }
 
-        if(tx_full)
-        {
-            tx_full = 0;
-            // Kita print beberapa sampel dari setengah buffer kedua
-            for(int i = (ADC_BUF_SIZE/2); i < (ADC_BUF_SIZE/2) + 10; i++)
-            {
-//                int len = sprintf(uart_buf, "ADC: %u\r\n", adc_buffer[i]);
-//            	int len = sprintf(uart_buf, "%u\r\n", adc_buffer[i]);
-            	int len = sprintf(uart_buf, ">ADC:%u\n", adc_buffer[i]);
-            	while(CDC_Transmit_FS((uint8_t*)uart_buf, len) == USBD_BUSY);
-            	HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, len, 10); // <-- DITAMBAHKAN: kirim juga via USART2
-            }
-        }
-    }
+      if (tx_full)
+      {
+          tx_full = 0;
+          reduce_half(&adc_buffer[ADC_BUF_SIZE / 2], ADC_BUF_SIZE / 2);
+          sample_blocks++;
+      }
+
+      if (HAL_GetTick() - last_report >= 1000)
+      {
+          last_report = HAL_GetTick();
+          int len = sprintf(uart_buf, ">blocks:%lu\n", sample_blocks);
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, len, 10);
+      }
+  }
   /* USER CODE END 3 */
 }
 
@@ -271,9 +219,9 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 336;
+  RCC_OscInitStruct.PLL.PLLN = 288;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 7;
+  RCC_OscInitStruct.PLL.PLLQ = 6;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -288,7 +236,7 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
   {
     Error_Handler();
   }
@@ -315,13 +263,13 @@ static void MX_ADC1_Init(void)
   /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
   */
   hadc1.Instance = ADC1;
-  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.ScanConvMode = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
-  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc1.Init.NbrOfConversion = 1;
   hadc1.Init.DMAContinuousRequests = ENABLE;
@@ -471,9 +419,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Prescaler = 0;
-  htim2.Init.Period    = 839;   // ≈500 kHz
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 874;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -513,7 +461,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 115200;   // was 1152000
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -645,24 +593,37 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-//void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
-//{
-//    adc_half_ready = 1;
-//}
-//
-//void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
-//{
-//    adc_full_ready = 1;
-//}
-//void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
-//{
-//    half_count++;
-//}
-//
-//void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
-//{
-//    full_count++;
-//}
+static void emit_sample(uint16_t v)
+{
+    int len = sprintf(uart_buf, ">ADC:%u\n", v);
+    while (CDC_Transmit_FS((uint8_t*)uart_buf, len) == USBD_BUSY) { usb_busy_count++; }
+    HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, len, 10);
+}
+
+/* Peak-hold: nilai tertinggi dalam jendela OUT_DECIM sampel jadi satu angka
+ * keluaran. acc_count/acc_peak persisten lintas panggilan supaya titik emit
+ * tidak dibulatkan ke batas half-buffer (sama seperti reduce_block referensi). */
+static void reduce_half(const volatile uint16_t *p, uint32_t n)
+{
+    uint32_t cnt  = acc_count;
+    uint16_t peak = acc_peak;
+
+    for (uint32_t i = 0; i < n; i++)
+    {
+        uint16_t v = p[i];
+        if (v > peak) { peak = v; }
+        cnt++;
+        if (cnt >= OUT_DECIM)
+        {
+            emit_sample(peak);
+            cnt = 0;
+            peak = 0;
+        }
+    }
+    acc_count = cnt;
+    acc_peak  = peak;
+}
+
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
 {
     tx_half = 1;
